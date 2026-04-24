@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using TMPro;
+using UnityEngine.SceneManagement;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(CapsuleCollider2D))]
@@ -7,20 +9,26 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(SpriteRenderer))]
 public class PlayerController : MonoBehaviour
 {
-    [Header("Movement Settings")]
     public float moveSpeed = 5f;
-    public float jumpForce = 12f;
-    [Tooltip("Layer que representa o chão para podermos pular.")]
+    public float jumpForce = 5f;
     public LayerMask groundLayer;
+    [Tooltip("Altura mínima (negativa) que o jogador pode cair antes de perder vida.")]
+    public float fallBoundaryY = -15f;
 
-    [Header("Climbing Settings")]
     public float climbSpeed = 4f;
-    [Tooltip("Layer que agrupa somente as escadas.")]
     public LayerMask ladderLayer;
 
-    [Header("Health & Combat")]
+    [Header("Collectibles")]
+    public int coinsCollected = 0;
+    private int totalCoinsInScene;
+    [Tooltip("Arraste o componente de Texto (Text - TextMeshPro) das Moedas aqui")]
+    public TextMeshProUGUI coinsText;
+
+    [Header("Health & Interface")]
     public int maxLives = 3;
     public int currentLives;
+    [Tooltip("Arraste das 3 imagens de Coração da sua Interface de dentro da Unity para cá")]
+    public GameObject[] heartsUI;
 
     private Rigidbody2D rb;
     private Animator animator;
@@ -31,6 +39,7 @@ public class PlayerController : MonoBehaviour
     private bool isClimbing;
     private bool isTouchingLadder;
     private float defaultGravity;
+    private Vector3 startPosition;
 
     private void Awake()
     {
@@ -42,13 +51,44 @@ public class PlayerController : MonoBehaviour
 
     private void Start()
     {
+        startPosition = transform.position;
+
+        // Como não herdamos mais as vidas, toda vez que a cena carregar recomeçamos com o máximo
         currentLives = maxLives;
+        
         defaultGravity = rb.gravityScale;
+        totalCoinsInScene = GameObject.FindGameObjectsWithTag("Coin").Length;
+
+        UpdateHeartsUI();
+        UpdateCoinsUI();
+    }
+
+    private void UpdateHeartsUI()
+    {
+        if (heartsUI == null) return;
+
+        for (int i = 0; i < heartsUI.Length; i++)
+        {
+            if (heartsUI[i] != null)
+            {
+                // Se a vida atual for maior que o numero do coração na lista, ele aparece, senão ele some.
+                heartsUI[i].SetActive(i < currentLives);
+            }
+        }
+    }
+
+    private void UpdateCoinsUI()
+    {
+        if (coinsText != null)
+        {
+            coinsText.text = coinsCollected.ToString() + " / " + totalCoinsInScene.ToString();
+        }
     }
 
     public void TakeDamage(int damage)
     {
         currentLives -= damage;
+        UpdateHeartsUI();
         Debug.Log("Você tomou dano! Vidas: " + currentLives);
 
         if (currentLives <= 0)
@@ -59,24 +99,19 @@ public class PlayerController : MonoBehaviour
 
     public void Bounce(float bounceForce)
     {
-        // Força impulsionada pra cima quando pula no inimigo
         rb.linearVelocity = new Vector2(rb.linearVelocity.x, bounceForce);
     }
 
     private void Die()
     {
-        Debug.Log("GAME OVER! Reiniciando cena...");
-        // Reinicia a fase caso as vidas acabem
-        UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+        SceneManager.LoadScene("Derrota");
     }
 
-    // This method is called by the PlayerInput component via "Send Messages"
     public void OnMove(InputValue value)
     {
         moveInput = value.Get<Vector2>();
     }
 
-    // Chamado pelo PlayerInput (New Input System) quando apertamos o botão de Pulo
     public void OnJump(InputValue value)
     {
         if (value.isPressed && IsGrounded())
@@ -95,22 +130,23 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
-        // Checa se tem alguma escada atrás de nós o tempo todo
+        if (transform.position.y < fallBoundaryY)
+        {
+            RespawnFromFall();
+        }
+
         CheckLadder();
 
-        // Só começa a escalar DE FATO se estivermos na escada e apertarmos pra cima (W) ou pra baixo (S)
         if (isTouchingLadder && Mathf.Abs(moveInput.y) > 0.1f)
         {
             isClimbing = true;
         }
 
-        // Se sair da escada perdemos a capacidade de escalar
         if (!isTouchingLadder)
         {
             isClimbing = false;
         }
 
-        // Flip sprite based on movement direction
         if (moveInput.x > 0.01f)
         {
             spriteRenderer.flipX = false;
@@ -120,31 +156,71 @@ public class PlayerController : MonoBehaviour
             spriteRenderer.flipX = true;
         }
 
-        // Update Animator (we assume a boolean parameter "isWalking" exists in the Animator)
         bool isWalking = Mathf.Abs(moveInput.x) > 0.01f;
         animator.SetBool("isWalking", isWalking);
     }
 
     private void CheckLadder()
     {
-        // Verifica se há algo da layer 'ladderLayer' cruzando nosso corpo
         Collider2D ladderColl = Physics2D.OverlapBox(coll.bounds.center, coll.bounds.size, 0f, ladderLayer);
         isTouchingLadder = (ladderColl != null);
+    }
+
+    private void RespawnFromFall()
+    {
+        TakeDamage(1);
+        
+        if (currentLives > 0)
+        {
+            rb.linearVelocity = Vector2.zero; 
+            transform.position = startPosition;
+        }
     }
 
     private void FixedUpdate()
     {
         if (isClimbing)
         {
-            // Tira a gravidade (para não escorregar pela corda) e aplica velocidade Cima/Baixo/Esquerda/Direita
             rb.gravityScale = 0f;
             rb.linearVelocity = new Vector2(moveInput.x * moveSpeed, moveInput.y * climbSpeed);
         }
         else
         {
-            // Devolve a gravidade e anda normalmente
             rb.gravityScale = defaultGravity;
             rb.linearVelocity = new Vector2(moveInput.x * moveSpeed, rb.linearVelocity.y);
+        }
+    }
+
+    private void OnTriggerEnter2D(Collider2D collision)
+    {
+        // Se esbarramos em algo que tem a TAG "Coin"
+        if (collision.CompareTag("Coin"))
+        {
+            Destroy(collision.gameObject);
+            coinsCollected++;
+            UpdateCoinsUI();
+
+            if (coinsCollected >= totalCoinsInScene && totalCoinsInScene > 0)
+            {
+                WinGame();
+            }
+        }
+    }
+
+    private void WinGame()
+    {
+        string sceneName = SceneManager.GetActiveScene().name;
+        if (sceneName == "Fase1")
+        {
+            SceneManager.LoadScene("Fase2");
+        }
+        else if (sceneName == "Fase2")
+        {
+            SceneManager.LoadScene("Vitoria");
+        }
+        else 
+        {
+             Debug.Log("Você venceu! (Configure as cenas Fase1 e Fase2 corretamente)");
         }
     }
 }
